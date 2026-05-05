@@ -1,7 +1,8 @@
 #include "my_player.hpp"
 #include "core/state.hpp"
+#include <algorithm>
 #include <cstdlib>
-
+#include <vector>
 namespace ttt::my_player {
 
 void MyPlayer::set_sign(Sign sign) { m_sign = sign; }
@@ -197,29 +198,98 @@ int evaluate_board(const FastBoard &fb, Sign current_sign) {
       }
     }
   }
-  // Возвращаем разницу. Это заставит бота учитывать ВСЕ угрозы на доске.
   return my_score - (int)(opp_score * 0.9);
 }
 
-// без альфа бета
-int negamax(FastBoard &fb, int depth, Sign current_sign, Sign bot_sign) {
-  if (depth == 0) {
-    int score = evaluate_board(fb, bot_sign);
-    return (current_sign == bot_sign) ? score : -score;
+struct RatedMove {
+  int x, y;
+  int weight;
+};
+
+bool compareMoves(const RatedMove &a, const RatedMove &b) {
+  return a.weight > b.weight;
+}
+
+bool check_win(const FastBoard &fb, int x, int y, Sign sgn) {
+  if (x < 0 || y < 0)
+    return false;
+  int directions[4][2] = {{1, 0}, {0, 1}, {1, 1}, {1, -1}};
+  for (auto &d : directions) {
+    int count = 1;
+    // вперед по направлению
+    for (int i = 1; i <= 4; i++) {
+      if (fb.get(x + i * d[0], y + i * d[1]) == sgn)
+        count++;
+      else
+        break;
+    }
+    // назад по направлению
+    for (int i = 1; i <= 4; i++) {
+      if (fb.get(x - i * d[0], y - i * d[1]) == sgn)
+        count++;
+      else
+        break;
+    }
+    if (count >= 5)
+      return true;
   }
-  int max_score = -100000000;
+  return false;
+}
+
+int negamax(FastBoard &fb, int depth, int alpha, int beta, Sign current_sign,
+            Sign bot_sign, int last_x, int last_y) {
   Sign opponent = (current_sign == Sign::X) ? Sign::O : Sign::X;
+
+  // если в предыдущем ходе победил противник, ветка проигрышная
+  if (check_win(fb, last_x, last_y, opponent)) {
+    // return -100000000;
+    return -100000000 + (depth * 1000);
+  }
+
+  // быстая оценка через максимум
+  if (depth == 0) {
+    return evaluate_board(fb, current_sign);
+  }
+
+  std::vector<RatedMove> moves;
   for (int x = 0; x < fb.rows; x++) {
     for (int y = 0; y < fb.cols; y++) {
       if (fb.get(x, y) != Sign::NONE || !is_promising(fb, x, y))
         continue;
-      fb.make_move(x, y, current_sign);
-      int score = -negamax(fb, depth - 1, opponent, bot_sign);
-      fb.undo_move(x, y);
-      if (score > max_score)
-        max_score = score;
+
+      int a_score = attack_score(fb, current_sign, x, y);
+      int d_score = attack_score(fb, opponent, x, y);
+
+      // если ход победный, дальше не копаем
+      if (a_score >= 10000000)
+        return 100000000;
+
+      moves.push_back({x, y, a_score + d_score});
     }
   }
+
+  if (moves.empty())
+    return 0; // ничья (доска заполнена)
+
+  std::sort(moves.begin(), moves.end(), compareMoves);
+  if (moves.size() > 6)
+    moves.resize(6); // ограничиваем ветвление для скорости
+
+  int max_score = -2000000000;
+  for (const auto &m : moves) {
+    fb.make_move(m.x, m.y, current_sign);
+    int score =
+        -negamax(fb, depth - 1, -beta, -alpha, opponent, bot_sign, m.x, m.y);
+    fb.undo_move(m.x, m.y);
+
+    if (score > max_score)
+      max_score = score;
+    if (score > alpha)
+      alpha = score;
+    if (alpha >= beta)
+      break;
+  }
+
   return max_score;
 }
 
@@ -227,32 +297,59 @@ Point MyPlayer::make_move(const State &state) {
   init_lookup_table();
   if (state.get_move_no() == 0)
     return find_start_move(state);
+
   FastBoard fb;
-  fb.sync(state); // Копируем данные в наш быстрый массив ОДИН раз
+  fb.sync(state);
 
-  Point best_move = {0, 0};
-  double max_weight = -1e9;
-  Sign opponent = (m_sign == Sign::X ? Sign::O : Sign::X);
+  Point best_move;
+  Sign opponent = (m_sign == Sign::X) ? Sign::O : Sign::X;
 
+  std::vector<RatedMove> root_moves;
   for (int x = 0; x < fb.rows; x++) {
     for (int y = 0; y < fb.cols; y++) {
       if (fb.get(x, y) != Sign::NONE || !is_promising(fb, x, y))
         continue;
 
-      // 1. Делаем пробный ход
-      fb.make_move(x, y, m_sign);
+      int a_score = attack_score(fb, m_sign, x, y);
+      int d_score = attack_score(fb, opponent, x, y);
 
-      // 2. Оцениваем последствия этого хода через негамакс
-      // Мы передаем opponent, так как следующий ход за ним
-      int score = -negamax(fb, 1, opponent, m_sign);
-
-      // 3. Отменяем ход
-      fb.undo_move(x, y);
-
-      if (score > max_weight) {
-        max_weight = score;
-        best_move = {x, y};
+      // победа в один ход
+      if (a_score >= 10000000) {
+        best_move.x = x;
+        best_move.y = y;
+        return best_move;
       }
+
+      root_moves.push_back({x, y, a_score + (d_score * 2)});
+    }
+  }
+
+  std::sort(root_moves.begin(), root_moves.end(), compareMoves);
+  if (root_moves.size() > 6)
+    root_moves.resize(6);
+
+  if (!root_moves.empty()) {
+    best_move.x = root_moves[0].x;
+    best_move.y = root_moves[0].y;
+  }
+
+  int alpha = -2000000000;
+  int beta = 2000000000;
+  int max_score = -2000000000;
+
+  for (const auto &m : root_moves) {
+    fb.make_move(m.x, m.y, m_sign);
+    int score = -negamax(fb, 5, -beta, -alpha, opponent, m_sign, m.x, m.y);
+    fb.undo_move(m.x, m.y);
+
+    if (score > max_score) {
+      max_score = score;
+      best_move.x = m.x;
+      best_move.y = m.y;
+    }
+    // Обновляем alpha на корневом уровне, иначе отсечение не работает
+    if (max_score > alpha) {
+      alpha = max_score;
     }
   }
 

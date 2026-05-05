@@ -17,7 +17,7 @@ int main(int argc, char *argv[]) {
 
   auto result = ttt::test::run_game_tests(
       p1, *p2,
-      1); // здесь вы можете изменить количество тестовых итераций ~~ 100
+      100); // здесь вы можете изменить количество тестовых итераций ~~ 100
 
   ttt::test::print_test_results(result, "MyPlayer", "BaselineEasy");
 
