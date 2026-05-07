@@ -15,11 +15,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake g++ libgtest-dev
       
-      - name: Force HTTPS for submodules
-        run: "git config --global url.'https://github.com/'.insteadOf git@github.com:"
-
       - name: Configure CMake
-        run: cmake -B build -S . -DBUILD_TTTCORE=FULL
+        run: cmake -B build -S
 
       - name: Build
         run: cmake --build build --config Release
