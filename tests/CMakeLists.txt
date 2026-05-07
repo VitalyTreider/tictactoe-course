@@ -8,6 +8,13 @@ add_test(NAME smoke_test_player COMMAND ./test_my_player)
 add_executable(test_stats test_stats.cpp)
 target_link_libraries(test_stats tttplayer)
 add_test(NAME test_player_stats COMMAND ./test_stats)
+# Мои CI tests
+find_package(GTest REQUIRED)
+
+add_executable(my_bot_tests ci_tests.cpp)
+target_link_libraries(my_bot_tests GTest::gtest_main tttplayer)
+
+add_test(NAME MyBotLogicTests COMMAND my_bot_tests)
 
 # Targets that require full or prebuilt tttcore
 if((BUILD_TTTCORE STREQUAL "FULL") OR (BUILD_TTTCORE STREQUAL "PREBUILT"))
